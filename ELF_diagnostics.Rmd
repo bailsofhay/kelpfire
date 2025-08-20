@@ -1,0 +1,172 @@
+---
+title: "ELF Diagnostics"
+output:
+  html_document:
+    df_print: paged
+Author: Bailey D. Morrison
+---
+
+```{r, warning=FALSE, message=FALSE}
+library(terra)
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+library(MASS)
+library(hexbin)
+library(ggtext)
+```
+
+```{r, warning=FALSE}
+# rasterized versions of the LTER kelp products from Tom Bell
+
+kelp = rast("C://Users/bdmor/Box/KelpFire/data/LTER_kelpBiomass/fCover/CAkelp_2014_Q3_fCover.tif")
+
+hsmax = rast("C://Users/bdmor/Box/KelpFire/data/LTER_kelpBiomass/hsmax/CAkelp_2014_Q3_hsmax.tif")
+
+depth = rast("C://Users/bdmor/Box/KelpFire/data/LTER_kelpBiomass/depth/CAkelp_depth.tif")
+
+nitrate = rast("C://Users/bdmor/Box/KelpFire/data/LTER_kelpBiomass/nitrate/CAkelp_2014_Q3_nitrate.tif")
+
+npp = rast("C://Users/bdmor/Box/KelpFire/data/LTER_kelpBiomass/npp/CAkelp_2014_Q3_npp.tif")
+
+parbttm_max = rast("C://Users/bdmor/Box/KelpFire/data/LTER_kelpBiomass/parbttm_max/CAkelp_2014_Q3_parbttm_max.tif")
+
+parbttm_mean = rast("C://Users/bdmor/Box/KelpFire/data/LTER_kelpBiomass/parbttm_mean/CAkelp_2014_Q3_parbttm_mean.tif")
+
+temp = rast("C://Users/bdmor/Box/KelpFire/data/LTER_kelpBiomass/temperature/CAkelp_2014_Q3_temperature.tif")
+
+```
+
+```{r}
+# stack all the rasters for easy extraction
+s = c(kelp, hsmax, depth, nitrate, npp, parbttm_max, parbttm_mean, temp)
+# dummy = rast(crs = crs(kelp), res = 250, ext = ext(kelp)) # upsamples to 250m resolution
+# s2 = terra::resample(s, dummy, method = "cubic", threads = T)
+```
+
+```{r}
+# which kelp cells have values
+range(kelp[], na.rm = T)
+x = which(kelp[] >= 0)
+
+# extract the values for each raster layer where there was kelp present
+dat = as.data.frame(terra::extract(s, x, xy = TRUE))
+
+# clean up dat names
+names(dat) = c("x", "y", "kelp", "hsmax", "depth", "nitrate", "npp", "parbttm_max", "parbttm_mean", "temp")
+dim(dat)
+```
+
+```{r}
+# remove rows that have missing data
+dat = dat[complete.cases(dat), ]
+dim(dat)
+
+d = as.data.frame(table(dat$kelp))
+d = d[order(d$Freq, decreasing = T), ]
+```
+
+
+# Visualize raw data
+```{r}
+# convert to long for to make facet plots
+dat_long = dat %>%
+  pivot_longer(cols = c(hsmax, depth, nitrate, npp, parbttm_max, parbttm_mean, temp),
+               names_to = "variable",
+               values_to = "value")
+
+# plot kelp vs. environmental variables
+ggplot(dat_long, aes(x = value, y = kelp))+
+  geom_hex() +
+  scale_fill_continuous(type = "viridis")+
+  facet_wrap(~variable, scales = "free_x") +
+  labs(y = "Kelp Fractional Area ", x = "Value", fill = "Count") +
+  theme_minimal()
+```
+
+
+# Outlier removal
+
+IQR removal didn't work, removed all data
+## Standard Deviation / Z-score method
+```{r}
+z_scores <- scale(dat$kelp)
+dat_no_outliers <- dat[abs(z_scores) < 3, ]
+
+# convert to long for to make facet plots
+dat_long = dat_no_outliers %>%
+  pivot_longer(cols = c(hsmax, depth, nitrate, npp, parbttm_max, parbttm_mean, temp),
+               names_to = "variable",
+               values_to = "value")
+
+# plot kelp vs. environmental variables
+ggplot(dat_long, aes(x = value, y = kelp))+
+  geom_hex() +
+  scale_fill_continuous(type = "viridis")+
+  facet_wrap(~variable, scales = "free_x") +
+  labs(title = "SD/Z No Outliers", y = "Kelp Fractional Area ", x = "Value", fill = "Count") +
+  theme_minimal()
+```
+
+## Transformations
+```{r}
+dat_long = dat %>%
+  pivot_longer(cols = c(hsmax, depth, nitrate, npp, parbttm_max, parbttm_mean, temp),
+               names_to = "variable",
+               values_to = "value")
+dat_long$value = log(dat_long$value)
+# plot kelp vs. environmental variables
+ggplot(dat_long, aes(x = value, y = kelp))+
+  geom_hex() +
+  scale_fill_continuous(type = "viridis")+
+  facet_wrap(~variable, scales = "free_x") +
+  labs(title = "Log Transformation", x = "Log(Value)")+
+  theme_minimal()
+```
+
+```{r}
+dat_long = dat %>%
+  pivot_longer(cols = c(hsmax, depth, nitrate, npp, parbttm_max, parbttm_mean, temp),
+               names_to = "variable",
+               values_to = "value")
+dat_long$value = sqrt(dat_long$value)
+# plot kelp vs. environmental variables
+ggplot(dat_long, aes(x = value, y = kelp))+
+  geom_hex() +
+  scale_fill_continuous(type = "viridis")+
+  facet_wrap(~variable, scales = "free_x") +
+  labs(title = "SQRT Transformation", x = "sqrt(Value)")+
+  theme_minimal()
+```
+
+Transformations also don't seem to help bring out patterns any better
+
+## Model-based outlier removal
+```{r}
+cov_matrix = cov(dat[, c("hsmax", "depth", "nitrate", "npp", "parbttm_max", "parbttm_mean", "temp")])
+
+center = colMeans(dat[, c("hsmax", "depth", "nitrate", "npp", "parbttm_max", "parbttm_mean", "temp")])
+
+md = mahalanobis(dat[, c("hsmax", "depth", "nitrate", "npp", "parbttm_max", "parbttm_mean", "temp")], center, cov_matrix)
+
+dat_no_outliers = dat[md < qchisq(0.975, df = 7), ]
+```
+
+```{r}
+dat_long = dat_no_outliers %>%
+  pivot_longer(cols = c(hsmax, depth, nitrate, npp, parbttm_max, parbttm_mean, temp),
+               names_to = "variable",
+               values_to = "value")
+# plot kelp vs. environmental variables
+ggplot(dat_long, aes(x = value, y = kelp))+
+  geom_hex() +
+  scale_fill_continuous(type = "viridis")+
+  facet_wrap(~variable, scales = "free_x") +
+  labs(title = "No Outliers", x = "Value")+
+  theme_minimal()
+```
+
+
+
+
+
