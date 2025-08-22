@@ -2,6 +2,7 @@ library(terra)
 library(rhdf5)
 library(sp)
 library(raster)
+library(lubridate)
 
 nc_file = "C://Users/bdmor/Box/KelpFire/data/LTER_kelpBiomass/CAkelpCanopyEnv_2021_final.nc"
 nc = h5ls(nc_file) # not actually a netcdf file. It's an HF5 shaped like a netcdf.
@@ -63,7 +64,57 @@ kelp_pts$from_id = near$from_id
 kelp_pts$to_id = near$to_id
 writeVector(kelp_pts, "C://Users/bdmor/Box/KelpFire/data/NHD_products/kelpDist2PtSource", filetype = "ESRI Shapefile")
 
+############### Identify fire dates ###############
+###################################################
+fires = vect("C://Users/bdmor/Box/KelpFire/data/fire_perimeters/fire_perimeters_1984-2021.shp")
+fires$quarter = NA
+fires$ALARM_DATE = lubridate::as_date(fires$ALARM_DATE, 
+                                      tz = "UTC")
+fires$quarter = lubridate::quarter(fires$ALARM_DATE, type = "quarter")
+fires$date = paste(fires$YEAR_, fires$quarter, sep = "_")
+fire_date = fires$date
+
 
 ############ Combine data by year ############
 ##############################################
+xy = crds(kelp_pts, df = T)
+xy$crs = "EPSG:3310"
 
+for (i in 1:length(date)){
+  working = print(paste0("Working on: ", date[i]))
+  if (date[i] %in% fire_date){
+    fire = fires[fires$date == date[i],]
+    near_fire = nearest(kelp_pts, fire)
+    dat = data.frame(ID = 1:nrow(xy), xy, date = date[i], area = area[,i],
+                     biomass = biomass[,i], depth = depth,
+                     hsmax = hsmax[,i], nitrate = nitrate[,i],
+                     npp = npp[,i], parbttm_max = parbttm_max[,i],
+                     parbttm_mean = parbttm_mean[,i],
+                     temp = temp[,i], dist = kelp_pts$Dist,
+                     dist_toID = kelp_pts$to_id, fireDist = near_fire$distance,
+                     fire_toID = near_fire$to_id,
+                     fire_acres = fire$GIS_ACRES[near_fire$to_id],
+                     fire_length = fire$Shape_Leng[near_fire$to_id],
+                     fire_area = fire$Shape_Area[near_fire$to_id])
+  } else {
+    dat = data.frame(ID = 1:nrow(xy), xy, date = date[i], area = area[,i],
+                     biomass = biomass[,i], depth = depth,
+                     hsmax = hsmax[,i], nitrate = nitrate[,i],
+                     npp = npp[,i], parbttm_max = parbttm_max[,i],
+                     parbttm_mean = parbttm_mean[,i],
+                     temp = temp[,i], dist = kelp_pts$Dist,
+                     dist_toID = kelp_pts$to_id, 
+                     fireDist = NA,
+                     fire_toID = NA,
+                     fire_acres = NA,
+                     fire_length = NA,
+                     fire_area = NA)
+  }
+  
+  dat$area[dat$area == -1] = NA
+  # dat[dat[,] == -1] = NA
+  d = dat[complete.cases(dat), ]
+  write.csv(d, 
+            file = paste0("C://Users/bdmor/Box/KelpFire/data/LTER_kelpBiomass/dataframe_by_year/LTER_kelp_ptSource_fire_", date[i], ".csv"),
+            row.names = FALSE)
+}
